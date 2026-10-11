@@ -310,7 +310,11 @@ with pages[0]:
     if st.session_state.get("entry_rate_signature") != rate_signature:
         st.session_state["entry_rate"] = suggested_rate
         st.session_state["entry_rate_signature"] = rate_signature
-    rate = st.number_input("Rate (₹)", min_value=0.0, step=100.0, key="entry_rate")
+    rate = st.number_input(
+        "Rate (₹)", min_value=0.0, step=100.0, key="entry_rate",
+        disabled=not is_admin,
+        help="Rate बदलण्याची परवानगी फक्त Admin ला आहे. Operator साठी Master मधील दर वापरला जाईल."
+    )
 
     with st.form("new_trip_entry_form", clear_on_submit=True):
         c1, c2, c3 = st.columns(3)
