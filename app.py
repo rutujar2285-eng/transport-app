@@ -300,7 +300,7 @@ with pages[0]:
     )
     bill_ref = c2.text_input("Bill / Invoice Reference (optional)", key="entry_bill_ref")
     material = c3.text_input("Material", key="entry_material")
-    remarks = st.text_area("Remarks", key="entry_remarks")
+    remarks = st.text_area("Narration (required)", key="entry_remarks", placeholder="Enter trip narration before saving")
 
     suggested_rate = (
         float(selected_vehicle.iloc[0]["fixed_rate"])
@@ -316,6 +316,8 @@ with pages[0]:
             st.error("No plant access assigned to this account.")
         elif not transporter or not vehicle_no:
             st.error("कृपया Transporter आणि Vehicle No. निवडा.")
+        elif not remarks.strip():
+            st.error("Trip save करण्यापूर्वी Narration लिहिणे आवश्यक आहे.")
         else:
             try:
                 trip_values = {
@@ -367,13 +369,124 @@ with pages[1]:
             df = df[df["plant"].isin(allowed_plants)]
         if plant_filter != "All":
             df = df[df["plant"] == plant_filter]
+
+    # Flag likely duplicates for visibility; do not silently delete existing records.
+    if not df.empty:
+        duplicate_key = ["trip_date", "plant", "transporter", "vehicle_no", "challan_no"]
+        df["Possible Duplicate"] = df.duplicated(subset=duplicate_key, keep=False) & df["challan_no"].fillna("").astype(str).str.strip().ne("")
+        if df["Possible Duplicate"].any():
+            st.warning("Possible duplicate trips दिसत आहेत. खालील नोंदी तपासा; योग्य नोंद निवडून Delete करा.")
     st.dataframe(df, use_container_width=True, hide_index=True)
     st.download_button(
-        "Download Register CSV",
-        df.to_csv(index=False).encode("utf-8-sig"),
-        "trip_register.csv",
-        "text/csv",
+        "Download Register CSV", df.to_csv(index=False).encode("utf-8-sig"),
+        "trip_register.csv", "text/csv"
     )
+
+    if not df.empty:
+        trip_ids = df["id"].astype(int).tolist()
+        chosen_id = st.selectbox("Edit / Delete साठी Trip ID निवडा", trip_ids, key="manage_trip_id")
+        selected_trip = df[df["id"] == chosen_id].iloc[0]
+        can_manage = is_admin or (
+            str(selected_trip["created_by"]) == username
+            and str(selected_trip["status"]) != "Verified"
+            and str(selected_trip["plant"]) in allowed_plants
+        )
+        if not can_manage:
+            st.info("Edit/Delete साठी Admin ला संपर्क करा. Verified trip operator बदलू/डिलीट करू शकत नाही.")
+        else:
+            act1, act2 = st.columns(2)
+            with act1:
+                if st.button("Edit Selected Trip", key="start_edit_trip"):
+                    st.session_state["edit_trip_id"] = int(chosen_id)
+            with act2:
+                delete_confirm = st.checkbox("मी ही Trip कायमची delete करायची खात्री करतो", key="delete_trip_confirm")
+                if st.button("Delete Selected Trip", disabled=not delete_confirm, key="delete_trip_button"):
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(text("DELETE FROM trips WHERE id=:id"), {"id": int(chosen_id)})
+                        audit(username, "DELETE", "trip", chosen_id, "Deleted from Trip Register")
+                        st.session_state.pop("edit_trip_id", None)
+                        st.success(f"Trip ID {chosen_id} deleted.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Trip delete failed: {exc}")
+
+        if st.session_state.get("edit_trip_id") == int(chosen_id):
+            # Editing is limited to non-verified trips unless the user is admin.
+            if str(selected_trip["status"]) == "Verified" and not is_admin:
+                st.error("Verified trip फक्त Admin edit करू शकतो.")
+            else:
+                st.markdown("#### Edit Trip")
+                with st.form("edit_trip_form"):
+                    ec1, ec2, ec3 = st.columns(3)
+                    e_date = ec1.date_input(
+                        "Trip Date", value=pd.to_datetime(selected_trip["trip_date"]).date(),
+                        format="DD-MM-YYYY", key="edit_date"
+                    )
+                    e_plant = ec2.selectbox(
+                        "Plant", PLANTS, index=PLANTS.index(selected_trip["plant"]) if selected_trip["plant"] in PLANTS else 0,
+                        key="edit_plant"
+                    )
+                    e_transport_type = ec3.selectbox(
+                        "Transport Type", ["", "Inward", "Outward", "Inter-plant", "Local", "Other"],
+                        index=(["", "Inward", "Outward", "Inter-plant", "Local", "Other"].index(selected_trip["transport_type"])
+                               if selected_trip["transport_type"] in ["", "Inward", "Outward", "Inter-plant", "Local", "Other"] else 0),
+                        key="edit_transport_type"
+                    )
+                    e_transporter = ec1.text_input("Transporter", value=str(selected_trip["transporter"]), key="edit_transporter")
+                    e_vehicle = ec2.text_input("Vehicle No.", value=str(selected_trip["vehicle_no"]), key="edit_vehicle")
+                    e_size = ec3.text_input("Vehicle Size", value=str(selected_trip["vehicle_size"] or ""), key="edit_size")
+                    e_vendor = ec1.text_input("Vendor", value=str(selected_trip["vendor"] or ""), key="edit_vendor")
+                    e_purpose = ec2.selectbox(
+                        "Purpose", ["", "Dispatch", "Local Trip", "Vendor"],
+                        index=(["", "Dispatch", "Local Trip", "Vendor"].index(selected_trip["purpose"])
+                               if selected_trip["purpose"] in ["", "Dispatch", "Local Trip", "Vendor"] else 0),
+                        key="edit_purpose"
+                    )
+                    e_challan = ec3.text_input("Challan No.", value=str(selected_trip["challan_no"] or ""), key="edit_challan")
+                    e_from = ec1.text_input("From Location", value=str(selected_trip["from_location"] or ""), key="edit_from")
+                    from_types = ["", "Plant", "Vendor", "Customer", "Warehouse", "Other"]
+                    e_from_type = ec2.selectbox("From Type", from_types, index=from_types.index(selected_trip["from_type"]) if selected_trip["from_type"] in from_types else 0, key="edit_from_type")
+                    e_to = ec3.text_input("To Location", value=str(selected_trip["to_location"] or ""), key="edit_to")
+                    to_types = ["", "Plant", "Vendor", "Customer", "Warehouse", "Other"]
+                    e_to_type = ec1.selectbox("To Type", to_types, index=to_types.index(selected_trip["to_type"]) if selected_trip["to_type"] in to_types else 0, key="edit_to_type")
+                    e_bill = ec2.text_input("Bill / Invoice Reference", value=str(selected_trip["bill_ref"] or ""), key="edit_bill")
+                    e_material = ec3.text_input("Material", value=str(selected_trip["material"] or ""), key="edit_material")
+                    e_narration = st.text_area("Narration (required)", value=str(selected_trip["remarks"] or ""), key="edit_narration")
+                    e_rate = st.number_input("Rate (₹)", min_value=0.0, value=float(selected_trip["rate"] or 0), step=100.0, key="edit_rate")
+                    save_edit = st.form_submit_button("Save Changes", type="primary")
+                    cancel_edit = st.form_submit_button("Cancel")
+                    if cancel_edit:
+                        st.session_state.pop("edit_trip_id", None)
+                        st.rerun()
+                    if save_edit:
+                        if not e_narration.strip():
+                            st.error("Trip update करण्यापूर्वी Narration लिहिणे आवश्यक आहे.")
+                        elif not is_admin and e_plant not in allowed_plants:
+                            st.error("तुम्हाला या Plant मध्ये edit करण्याची परवानगी नाही.")
+                        else:
+                            try:
+                                with engine.begin() as conn:
+                                    conn.execute(text("""UPDATE trips SET
+                                        trip_date=:d, plant=:p, transport_type=:tt, transporter=:tr,
+                                        vehicle_no=:v, vehicle_size=:vs, vendor=:ve, purpose=:pu,
+                                        challan_no=:ch, from_location=:fl, from_type=:ft,
+                                        to_location=:tl, to_type=:to, bill_ref=:br, material=:ma,
+                                        remarks=:re, rate=:ra
+                                        WHERE id=:id"""), {
+                                            "d": e_date.isoformat(), "p": e_plant, "tt": e_transport_type,
+                                            "tr": e_transporter.strip(), "v": e_vehicle.strip().upper(),
+                                            "vs": e_size, "ve": e_vendor, "pu": e_purpose, "ch": e_challan,
+                                            "fl": e_from, "ft": e_from_type, "tl": e_to, "to": e_to_type,
+                                            "br": e_bill.strip(), "ma": e_material, "re": e_narration.strip(),
+                                            "ra": e_rate, "id": int(chosen_id)
+                                        })
+                                audit(username, "UPDATE", "trip", chosen_id, "Edited from Trip Register")
+                                st.session_state.pop("edit_trip_id", None)
+                                st.success("Trip updated.")
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(f"Trip update failed: {exc}")
 
 with pages[2]:
     st.subheader("Reports")
