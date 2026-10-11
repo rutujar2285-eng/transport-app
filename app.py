@@ -55,7 +55,9 @@ def init_db():
         f"""CREATE TABLE IF NOT EXISTS vehicles (
             id {id_column}, vehicle_no TEXT NOT NULL UNIQUE,
             transporter TEXT NOT NULL, vehicle_size TEXT DEFAULT '',
-            fixed_rate NUMERIC NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1
+            fixed_rate NUMERIC NOT NULL DEFAULT 0,
+            local_trip_rate NUMERIC NOT NULL DEFAULT 0, vendor_trip_rate NUMERIC NOT NULL DEFAULT 0,
+            active INTEGER NOT NULL DEFAULT 1
         )""",
         f"""CREATE TABLE IF NOT EXISTS trips (
             id {id_column}, trip_date TEXT NOT NULL, plant TEXT NOT NULL,
@@ -79,6 +81,16 @@ def init_db():
     with engine.begin() as conn:
         for statement in statements:
             conn.execute(text(statement))
+        # Safely add rate columns to existing databases.
+        if engine.dialect.name == "postgresql":
+            conn.execute(text("ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS local_trip_rate NUMERIC NOT NULL DEFAULT 0"))
+            conn.execute(text("ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS vendor_trip_rate NUMERIC NOT NULL DEFAULT 0"))
+        else:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(vehicles)")).fetchall()}
+            if "local_trip_rate" not in cols:
+                conn.execute(text("ALTER TABLE vehicles ADD COLUMN local_trip_rate NUMERIC NOT NULL DEFAULT 0"))
+            if "vendor_trip_rate" not in cols:
+                conn.execute(text("ALTER TABLE vehicles ADD COLUMN vendor_trip_rate NUMERIC NOT NULL DEFAULT 0"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_trips_date ON trips(trip_date)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_trips_plant ON trips(plant)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_trips_transporter ON trips(transporter)"))
@@ -137,7 +149,7 @@ def load_trip_entry_masters():
             text("SELECT name FROM transporters WHERE active=1 ORDER BY name"), conn
         )
         vehicle_df = pd.read_sql(
-            text("SELECT vehicle_no, transporter, vehicle_size, fixed_rate "
+            text("SELECT vehicle_no, transporter, vehicle_size, fixed_rate, local_trip_rate, vendor_trip_rate "
                  "FROM vehicles WHERE active=1 ORDER BY vehicle_no"), conn
         )
         vendor_df = pd.read_sql(
@@ -291,7 +303,19 @@ with pages[0]:
         challan_no = c3.text_input("Challan No.", key="entry_challan_no")
         material = st.text_input("Material", key="entry_material")
         remarks = st.text_area("Narration (required)", key="entry_remarks", placeholder="Enter trip narration before saving")
-        suggested_rate = float(selected_vehicle.iloc[0]["fixed_rate"]) if not selected_vehicle.empty and pd.notna(selected_vehicle.iloc[0]["fixed_rate"]) else 0.0
+        if not selected_vehicle.empty:
+            # Rate is determined by Transport Type, not Purpose:
+            # Outward = outward rate; Inter-plant and Local = same rate; Other = other rate.
+            if transport_type == "Outward":
+                rate_column = "vendor_trip_rate"  # stored column reused for Outward rate
+            elif transport_type in ("Inter-plant", "Local"):
+                rate_column = "local_trip_rate"   # shared Local / Inter-plant rate
+            else:
+                rate_column = "fixed_rate"         # Other (and Inward fallback) rate
+            raw_rate = selected_vehicle.iloc[0].get(rate_column, 0)
+            suggested_rate = float(raw_rate) if pd.notna(raw_rate) else 0.0
+        else:
+            suggested_rate = 0.0
         rate = st.number_input("Rate (₹)", min_value=0.0, value=suggested_rate, step=100.0, key="entry_rate")
         submitted = st.form_submit_button("Save Trip", type="primary", disabled=not allowed_plants, use_container_width=True)
 
@@ -665,7 +689,9 @@ if is_admin:
                 v = st.text_input("Vehicle Number")
                 tr = st.selectbox("Transporter", [""] + trans)
                 sz = st.text_input("Vehicle Size")
-                rt = st.number_input("Fixed Rate (₹)", min_value=0.0, step=100.0)
+                local_rt = st.number_input("Local + Inter-plant Rate (₹)", min_value=0.0, step=100.0, help="Transport Type = Local किंवा Inter-plant साठी समान दर.")
+                vendor_rt = st.number_input("Outward Rate (₹)", min_value=0.0, step=100.0, help="Transport Type = Outward साठी स्वतंत्र दर.")
+                rt = st.number_input("Other Rate (₹)", min_value=0.0, step=100.0, help="Transport Type = Other साठी स्वतंत्र दर. Inward साठीही हा fallback दर वापरला जाईल.")
                 ok = st.form_submit_button("Add / Update Vehicle")
                 if ok:
                     if not v.strip() or not tr:
@@ -680,16 +706,17 @@ if is_admin:
                                 ).first()
                                 if exists:
                                     conn.execute(text("""UPDATE vehicles SET transporter=:t,
-                                        vehicle_size=:s, fixed_rate=:r, active=1 WHERE vehicle_no=:v"""),
-                                        {"t": tr, "s": sz.strip(), "r": rt, "v": vehicle_key},
+                                        vehicle_size=:s, fixed_rate=:r, local_trip_rate=:lr,
+                                        vendor_trip_rate=:vr, active=1 WHERE vehicle_no=:v"""),
+                                        {"t": tr, "s": sz.strip(), "r": rt, "lr": local_rt, "vr": vendor_rt, "v": vehicle_key},
                                     )
                                 else:
                                     conn.execute(text("""INSERT INTO vehicles
-                                        (vehicle_no, transporter, vehicle_size, fixed_rate)
-                                        VALUES (:v, :t, :s, :r)"""),
-                                        {"v": vehicle_key, "t": tr, "s": sz.strip(), "r": rt},
+                                        (vehicle_no, transporter, vehicle_size, fixed_rate, local_trip_rate, vendor_trip_rate)
+                                        VALUES (:v, :t, :s, :r, :lr, :vr)"""),
+                                        {"v": vehicle_key, "t": tr, "s": sz.strip(), "r": rt, "lr": local_rt, "vr": vendor_rt},
                                     )
-                            audit(username, "UPSERT", "vehicle", vehicle_key, f"transporter={tr};rate={rt}")
+                            audit(username, "UPSERT", "vehicle", vehicle_key, f"transporter={tr};local_interplant_rate={local_rt};outward_rate={vendor_rt};other_rate={rt}")
                             st.success("Vehicle/rate saved.")
                             st.rerun()
                         except Exception as exc:
