@@ -285,21 +285,13 @@ with pages[0]:
     )
     challan_no = c3.text_input("Challan No.", key="entry_challan_no")
 
-    c1, c2, c3 = st.columns(3)
-    from_location = c1.text_input("From Location", key="entry_from_location")
-    from_type = c2.selectbox(
-        "From Type", ["", "Plant", "Vendor", "Customer", "Warehouse", "Other"],
-        key="entry_from_type"
-    )
-    to_location = c3.text_input("To Location", key="entry_to_location")
-
-    c1, c2, c3 = st.columns(3)
-    to_type = c1.selectbox(
-        "To Type", ["", "Plant", "Vendor", "Customer", "Warehouse", "Other"],
-        key="entry_to_type"
-    )
-    bill_ref = c2.text_input("Bill / Invoice Reference (optional)", key="entry_bill_ref")
-    material = c3.text_input("Material", key="entry_material")
+    # Hidden from the entry screen as requested; database columns are retained for existing records.
+    from_location = ""
+    from_type = ""
+    to_location = ""
+    to_type = ""
+    bill_ref = ""
+    material = st.text_input("Material", key="entry_material")
     remarks = st.text_area("Narration (required)", key="entry_remarks", placeholder="Enter trip narration before saving")
 
     suggested_rate = (
@@ -444,13 +436,12 @@ with pages[1]:
                         key="edit_purpose"
                     )
                     e_challan = ec3.text_input("Challan No.", value=str(selected_trip["challan_no"] or ""), key="edit_challan")
-                    e_from = ec1.text_input("From Location", value=str(selected_trip["from_location"] or ""), key="edit_from")
-                    from_types = ["", "Plant", "Vendor", "Customer", "Warehouse", "Other"]
-                    e_from_type = ec2.selectbox("From Type", from_types, index=from_types.index(selected_trip["from_type"]) if selected_trip["from_type"] in from_types else 0, key="edit_from_type")
-                    e_to = ec3.text_input("To Location", value=str(selected_trip["to_location"] or ""), key="edit_to")
-                    to_types = ["", "Plant", "Vendor", "Customer", "Warehouse", "Other"]
-                    e_to_type = ec1.selectbox("To Type", to_types, index=to_types.index(selected_trip["to_type"]) if selected_trip["to_type"] in to_types else 0, key="edit_to_type")
-                    e_bill = ec2.text_input("Bill / Invoice Reference", value=str(selected_trip["bill_ref"] or ""), key="edit_bill")
+                    # These fields are hidden in the UI; preserve existing values when editing.
+                    e_from = str(selected_trip["from_location"] or "")
+                    e_from_type = str(selected_trip["from_type"] or "")
+                    e_to = str(selected_trip["to_location"] or "")
+                    e_to_type = str(selected_trip["to_type"] or "")
+                    e_bill = str(selected_trip["bill_ref"] or "")
                     e_material = ec3.text_input("Material", value=str(selected_trip["material"] or ""), key="edit_material")
                     e_narration = st.text_area("Narration (required)", value=str(selected_trip["remarks"] or ""), key="edit_narration")
                     e_rate = st.number_input("Rate (₹)", min_value=0.0, value=float(selected_trip["rate"] or 0), step=100.0, key="edit_rate")
