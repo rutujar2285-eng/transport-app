@@ -484,12 +484,13 @@ with pages[1]:
                                 st.error(f"Trip update failed: {exc}")
 
 with pages[2]:
-    st.subheader("Reports")
+    st.subheader("Transport Reports")
+    st.caption("निवडलेल्या कालावधीतील ट्रिपचा सेव्ह केलेला रेट/Amount वापरला जातो. Vehicle Master मधील नवीन रेट जुन्या ट्रिपवर लागू होत नाही.")
     r1, r2 = st.columns(2)
     rd1 = r1.date_input("Report From", value=date.today().replace(day=1), key="rep_from", format="DD-MM-YYYY")
     rd2 = r2.date_input("Report To", value=datetime.now(TZ).date(), key="rep_to", format="DD-MM-YYYY")
     if rd1 > rd2:
-        st.warning("Report From ही Report To पेक्षा आधीची असावी.")
+        st.warning("Report From ही Report To पेक्षा आधीची तारीख असावी.")
         rdf = pd.DataFrame()
     else:
         rdf = read_df(
@@ -500,34 +501,53 @@ with pages[2]:
             rdf = rdf[rdf["plant"].isin(allowed_plants)]
 
     if not rdf.empty:
-        total_amount = pd.to_numeric(rdf["rate"], errors="coerce").fillna(0).sum()
-        st.metric("Total Trips", len(rdf))
-        st.metric("Total Amount", f"₹{total_amount:,.2f}")
-        c1, c2 = st.columns(2)
+        # Reports must use the rate saved on each trip, never the current vehicle master rate.
+        rdf = rdf.copy()
+        rdf["rate"] = pd.to_numeric(rdf["rate"], errors="coerce").fillna(0)
+        total_amount = float(rdf["rate"].sum())
+        zero_rate_count = int((rdf["rate"] == 0).sum())
+        st.caption(f"कालावधी: {rd1.strftime('%d-%m-%Y')} ते {rd2.strftime('%d-%m-%Y')}")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Total Trips", f"{len(rdf):,}")
+        m2.metric("Total Amount", f"₹{total_amount:,.2f}")
+        m3.metric("Zero-rate trips", f"{zero_rate_count:,}")
+        if zero_rate_count:
+            st.warning(f"{zero_rate_count} ट्रिपचा सेव्ह केलेला Rate ₹0 आहे. Master मधील रेट बदलल्यामुळे जुन्या ट्रिपचा Amount आपोआप भरला जाणार नाही. Trip Register मधून संबंधित ट्रिप Edit करून योग्य Rate सेव्ह करा; आधीचा बॅकअप उपलब्ध असल्यास त्यातून जुना Rate पडताळा.")
+
         summaries = [
             ("Date-wise", "trip_date"),
             ("Transporter-wise", "transporter"),
             ("Vendor-wise", "vendor"),
             ("Plant-wise", "plant"),
             ("Status-wise", "status"),
+            ("Transport Type-wise", "transport_type"),
         ]
-        for index, (label, column) in enumerate(summaries):
-            target = c1 if index % 2 == 0 else c2
-            target.write(f"**{label}**")
-            summary = rdf.groupby(column, dropna=False, as_index=False).agg(
-                Trips=("id", "count"), Amount=("rate", "sum")
-            )
-            target.dataframe(summary, use_container_width=True)
+        st.markdown("### Summary")
+        summary_tabs = st.tabs([x[0] for x in summaries])
+        for tab, (label, column) in zip(summary_tabs, summaries):
+            with tab:
+                summary = rdf.groupby(column, dropna=False, as_index=False).agg(
+                    Trips=("id", "count"), Amount=("rate", "sum")
+                )
+                summary["Amount"] = summary["Amount"].map(lambda x: f"₹{x:,.2f}")
+                st.dataframe(summary, use_container_width=True, hide_index=True)
+
+        with st.expander("View trip-level details", expanded=False):
+            display_cols = [c for c in ["id", "trip_date", "plant", "transport_type", "transporter", "vehicle_no", "vendor", "challan_no", "rate", "status"] if c in rdf.columns]
+            detail = rdf[display_cols].copy()
+            detail["trip_date"] = pd.to_datetime(detail["trip_date"], errors="coerce").dt.strftime("%d-%m-%Y")
+            detail = detail.rename(columns={"id":"Trip ID", "trip_date":"Date", "plant":"Plant", "transport_type":"Transport Type", "transporter":"Transporter", "vehicle_no":"Vehicle No.", "vendor":"Vendor", "challan_no":"Challan No.", "rate":"Saved Amount (₹)", "status":"Status"})
+            st.dataframe(detail, use_container_width=True, hide_index=True)
 
         xbuf = io.BytesIO()
         with pd.ExcelWriter(xbuf, engine="openpyxl") as writer:
             rdf.to_excel(writer, index=False, sheet_name="Trips")
-            for label, column in summaries[:4]:
+            for label, column in summaries:
                 rdf.groupby(column, dropna=False, as_index=False).agg(
                     Trips=("id", "count"), Amount=("rate", "sum")
                 ).to_excel(writer, index=False, sheet_name=label[:31])
         st.download_button(
-            "Download Excel Report", xbuf.getvalue(), "transport_report.xlsx",
+            "⬇️ Download Excel Report", xbuf.getvalue(), "transport_report.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
@@ -537,28 +557,23 @@ with pages[2]:
             topMargin=20, bottomMargin=20,
         )
         styles = getSampleStyleSheet()
-        table_data = [list(map(str, rdf.columns))] + rdf.fillna("").astype(str).values.tolist()
-        report_table = Table(table_data, repeatRows=1)
+        pdf_cols = [c for c in ["id", "trip_date", "plant", "transport_type", "transporter", "vehicle_no", "vendor", "challan_no", "rate", "status"] if c in rdf.columns]
+        pdf_df = rdf[pdf_cols].copy().fillna("").astype(str)
+        pdf_data = [list(pdf_df.columns)] + pdf_df.values.tolist()
+        report_table = Table(pdf_data, repeatRows=1)
         report_table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#12304a")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
-            ("FONTSIZE", (0, 0), (-1, -1), 6),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ]))
         doc.build([
             Paragraph("Transport Management Report", styles["Title"]),
-            Paragraph(
-                f"{rd1.strftime('%d-%m-%Y')} to {rd2.strftime('%d-%m-%Y')} | "
-                f"Trips: {len(rdf)} | Total: ₹{total_amount:,.2f}",
-                styles["Normal"],
-            ),
-            Spacer(1, 12),
-            report_table,
+            Paragraph(f"{rd1.strftime('%d-%m-%Y')} to {rd2.strftime('%d-%m-%Y')} | Trips: {len(rdf)} | Saved Amount Total: ₹{total_amount:,.2f}", styles["Normal"]),
+            Spacer(1, 12), report_table,
         ])
-        st.download_button(
-            "Download PDF Report", pbuf.getvalue(), "transport_report.pdf", "application/pdf"
-        )
+        st.download_button("⬇️ Download PDF Report", pbuf.getvalue(), "transport_report.pdf", "application/pdf")
     else:
         st.info("या कालावधीमध्ये रिपोर्टसाठी नोंदी नाहीत.")
 
