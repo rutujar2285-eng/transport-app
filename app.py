@@ -129,6 +129,27 @@ def options(sql, column):
     return df[column].dropna().astype(str).tolist() if not df.empty else []
 
 
+@st.cache_data(ttl=20, show_spinner=False)
+def load_trip_entry_masters():
+    """Cache entry dropdown master data briefly to reduce database round-trips."""
+    with engine.connect() as conn:
+        trans_df = pd.read_sql(
+            text("SELECT name FROM transporters WHERE active=1 ORDER BY name"), conn
+        )
+        vehicle_df = pd.read_sql(
+            text("SELECT vehicle_no, transporter, vehicle_size, fixed_rate "
+                 "FROM vehicles WHERE active=1 ORDER BY vehicle_no"), conn
+        )
+        vendor_df = pd.read_sql(
+            text("SELECT name FROM vendors WHERE active=1 ORDER BY name"), conn
+        )
+    return (
+        trans_df["name"].dropna().astype(str).tolist() if not trans_df.empty else [],
+        vehicle_df,
+        vendor_df["name"].dropna().astype(str).tolist() if not vendor_df.empty else [],
+    )
+
+
 def insert_trip(values):
     """Insert a trip and return its ID in both PostgreSQL and SQLite."""
     if engine.dialect.name == "postgresql":
@@ -227,16 +248,22 @@ if is_admin:
 pages = st.tabs(tabs)
 
 with pages[0]:
+    # Clear the previous trip's values on the rerun after a successful save.
+    if st.session_state.pop("reset_trip_entry_fields", False):
+        for field_key in (
+            "entry_trip_date", "entry_plant", "entry_transport_type",
+            "entry_transporter", "entry_vehicle_no", "entry_vendor",
+            "entry_purpose", "entry_challan_no", "entry_material",
+            "entry_remarks", "entry_rate", "entry_vehicle_size_display",
+        ):
+            st.session_state.pop(field_key, None)
+
     st.subheader("New Trip Entry")
     if not allowed_plants:
         st.warning("No plant access assigned to this account. Ask an admin to assign plant access.")
 
-    trans_list = options("SELECT name FROM transporters WHERE active=1 ORDER BY name", "name")
-    veh_df = read_df(
-        "SELECT vehicle_no, transporter, vehicle_size, fixed_rate "
-        "FROM vehicles WHERE active=1 ORDER BY vehicle_no"
-    )
-    vendor_list = options("SELECT name FROM vendors WHERE active=1 ORDER BY name", "name")
+    # Cached for 20 seconds: dropdown edits no longer query all three master tables each time.
+    trans_list, veh_df, vendor_list = load_trip_entry_masters()
 
     # Keep the vehicle selector outside a form so it refreshes immediately when transporter changes.
     c1, c2, c3 = st.columns(3)
@@ -338,6 +365,7 @@ with pages[0]:
                     username, "CREATE", "trip", trip_id,
                     f"plant={plant}; transporter={transporter}; vehicle={vehicle_no}",
                 )
+                st.session_state["reset_trip_entry_fields"] = True
                 st.success(f"Trip saved. Trip ID: {trip_id}")
                 st.rerun()
             except Exception as exc:
@@ -497,12 +525,6 @@ with pages[2]:
 
     if not rdf.empty:
         total_amount = pd.to_numeric(rdf["rate"], errors="coerce").fillna(0).sum()
-        # Hide internal/detail fields from Reports screen and exported Excel/PDF.
-        hidden_report_columns = [
-            "from_location", "from_type", "to_location", "to_type",
-            "bill_ref", "material", "remarks", "verified_by", "verified_at",
-        ]
-        report_df = rdf.drop(columns=hidden_report_columns, errors="ignore")
         st.metric("Total Trips", len(rdf))
         st.metric("Total Amount", f"₹{total_amount:,.2f}")
         c1, c2 = st.columns(2)
@@ -523,7 +545,7 @@ with pages[2]:
 
         xbuf = io.BytesIO()
         with pd.ExcelWriter(xbuf, engine="openpyxl") as writer:
-            report_df.to_excel(writer, index=False, sheet_name="Trips")
+            rdf.to_excel(writer, index=False, sheet_name="Trips")
             for label, column in summaries[:4]:
                 rdf.groupby(column, dropna=False, as_index=False).agg(
                     Trips=("id", "count"), Amount=("rate", "sum")
@@ -539,7 +561,7 @@ with pages[2]:
             topMargin=20, bottomMargin=20,
         )
         styles = getSampleStyleSheet()
-        table_data = [list(map(str, report_df.columns))] + report_df.fillna("").astype(str).values.tolist()
+        table_data = [list(map(str, rdf.columns))] + rdf.fillna("").astype(str).values.tolist()
         report_table = Table(table_data, repeatRows=1)
         report_table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#12304a")),
