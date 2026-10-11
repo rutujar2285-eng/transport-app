@@ -11,7 +11,13 @@ from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 
 TZ = ZoneInfo("Asia/Kolkata")
-PLANTS = ["Plant 1", "Plant 2", "Plant 3", "Plant 4", "Plant 5"]
+PLANTS = [
+    "J-Block",
+    "F-2-Block",
+    "T-Block",
+    "S-Block",
+    "GAURI-T-Block"
+]
 st.set_page_config(page_title="Transport Management System", page_icon="🚛", layout="wide")
 
 def get_db_url():
