@@ -122,6 +122,9 @@ if not st.session_state.user:
             else:
                 st.error("Invalid username or password.")
         st.stop()
+      user = st.session_state.user
+username = user["username"]
+role = user["role"].lower()
 is_admin = role == "admin"
 allowed_plants = PLANTS if is_admin else [p for p in user.get("plants", []) if p in PLANTS]
 with st.sidebar:
