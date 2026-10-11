@@ -129,6 +129,27 @@ def options(sql, column):
     return df[column].dropna().astype(str).tolist() if not df.empty else []
 
 
+@st.cache_data(ttl=20, show_spinner=False)
+def load_trip_entry_masters():
+    """Cache entry dropdown master data briefly to reduce database round-trips."""
+    with engine.connect() as conn:
+        trans_df = pd.read_sql(
+            text("SELECT name FROM transporters WHERE active=1 ORDER BY name"), conn
+        )
+        vehicle_df = pd.read_sql(
+            text("SELECT vehicle_no, transporter, vehicle_size, fixed_rate "
+                 "FROM vehicles WHERE active=1 ORDER BY vehicle_no"), conn
+        )
+        vendor_df = pd.read_sql(
+            text("SELECT name FROM vendors WHERE active=1 ORDER BY name"), conn
+        )
+    return (
+        trans_df["name"].dropna().astype(str).tolist() if not trans_df.empty else [],
+        vehicle_df,
+        vendor_df["name"].dropna().astype(str).tolist() if not vendor_df.empty else [],
+    )
+
+
 def insert_trip(values):
     """Insert a trip and return its ID in both PostgreSQL and SQLite."""
     if engine.dialect.name == "postgresql":
@@ -227,129 +248,77 @@ if is_admin:
 pages = st.tabs(tabs)
 
 with pages[0]:
-    # Clear the previous trip's values on the rerun after a successful save.
+    # Clear saved values before recreating widgets after a successful submission.
     if st.session_state.pop("reset_trip_entry_fields", False):
         for field_key in (
             "entry_trip_date", "entry_plant", "entry_transport_type",
             "entry_transporter", "entry_vehicle_no", "entry_vendor",
             "entry_purpose", "entry_challan_no", "entry_material",
-            "entry_remarks", "entry_rate", "entry_vehicle_size_display",
+            "entry_remarks", "entry_rate",
         ):
             st.session_state.pop(field_key, None)
 
+    saved_message = st.session_state.pop("trip_saved_message", None)
+    if saved_message:
+        st.success(saved_message)
     st.subheader("New Trip Entry")
     if not allowed_plants:
         st.warning("No plant access assigned to this account. Ask an admin to assign plant access.")
 
-    trans_list = options("SELECT name FROM transporters WHERE active=1 ORDER BY name", "name")
-    veh_df = read_df(
-        "SELECT vehicle_no, transporter, vehicle_size, fixed_rate "
-        "FROM vehicles WHERE active=1 ORDER BY vehicle_no"
-    )
-    vendor_list = options("SELECT name FROM vendors WHERE active=1 ORDER BY name", "name")
-
-    # Keep the vehicle selector outside a form so it refreshes immediately when transporter changes.
+    trans_list, veh_df, vendor_list = load_trip_entry_masters()
+    # Put entry fields in one Streamlit form: the app will not rerun after every field.
+    # Vehicle choices include all master vehicles; the transporter/vehicle match is validated on save.
+    vehicle_options = veh_df["vehicle_no"].dropna().astype(str).tolist() if not veh_df.empty else []
     c1, c2, c3 = st.columns(3)
-    trip_date = c1.date_input("Trip Date", value=datetime.now(TZ).date(), format="DD-MM-YYYY", key="entry_trip_date")
-    plant = c2.selectbox(
-        "Plant", allowed_plants if allowed_plants else ["No plant access"],
-        disabled=not allowed_plants, key="entry_plant"
-    )
-    transport_type = c3.selectbox(
-        "Transport Type", ["", "Inward", "Outward", "Inter-plant", "Local", "Other"],
-        key="entry_transport_type"
-    )
+    with st.form("new_trip_entry_form", clear_on_submit=True):
+        c1, c2, c3 = st.columns(3)
+        trip_date = c1.date_input("Trip Date", value=datetime.now(TZ).date(), format="DD-MM-YYYY", key="entry_trip_date")
+        plant = c2.selectbox("Plant", allowed_plants if allowed_plants else ["No plant access"], disabled=not allowed_plants, key="entry_plant")
+        transport_type = c3.selectbox("Transport Type", ["", "Inward", "Outward", "Inter-plant", "Local", "Other"], key="entry_transport_type")
 
-    c1, c2, c3 = st.columns(3)
-    transporter = c1.selectbox("Transporter", [""] + trans_list, key="entry_transporter")
-    matching_vehicles = (
-        veh_df[veh_df["transporter"] == transporter]
-        if transporter and not veh_df.empty
-        else veh_df.iloc[0:0]
-    )
-    vehicle_options = matching_vehicles["vehicle_no"].astype(str).tolist()
-    vehicle_no = c2.selectbox(
-        "Vehicle No.", [""] + vehicle_options, key="entry_vehicle_no",
-        help="Transporter निवडल्यानंतर त्या transporter ची vehicles लगेच दिसतील."
-    )
-    selected_vehicle = (
-        matching_vehicles[matching_vehicles["vehicle_no"] == vehicle_no]
-        if vehicle_no else pd.DataFrame()
-    )
-    master_size = (
-        str(selected_vehicle.iloc[0]["vehicle_size"] or "")
-        if not selected_vehicle.empty else ""
-    )
-    if master_size.lower() == "nan":
-        master_size = ""
-    vehicle_size = c3.text_input(
-        "Vehicle Size (from master)", value=master_size, disabled=True,
-        key="entry_vehicle_size_display",
-        help="Vehicle Master मध्ये नोंदवलेला size येथे आपोआप दिसेल."
-    )
+        c1, c2, c3 = st.columns(3)
+        transporter = c1.selectbox("Transporter", [""] + trans_list, key="entry_transporter")
+        vehicle_no = c2.selectbox("Vehicle No.", [""] + vehicle_options, key="entry_vehicle_no")
+        selected_vehicle = veh_df[veh_df["vehicle_no"].astype(str) == vehicle_no] if vehicle_no and not veh_df.empty else pd.DataFrame()
+        master_size = str(selected_vehicle.iloc[0]["vehicle_size"] or "") if not selected_vehicle.empty else ""
+        if master_size.lower() == "nan":
+            master_size = ""
+        c3.text_input("Vehicle Size (from master)", value=master_size, disabled=True)
 
-    c1, c2, c3 = st.columns(3)
-    vendor = c1.selectbox("Vendor", [""] + vendor_list, key="entry_vendor")
-    purpose = c2.selectbox(
-        "Purpose", ["", "Dispatch", "Local Trip", "Vendor"], key="entry_purpose"
-    )
-    challan_no = c3.text_input("Challan No.", key="entry_challan_no")
+        c1, c2, c3 = st.columns(3)
+        vendor = c1.selectbox("Vendor", [""] + vendor_list, key="entry_vendor")
+        purpose = c2.selectbox("Purpose", ["", "Dispatch", "Local Trip", "Vendor"], key="entry_purpose")
+        challan_no = c3.text_input("Challan No.", key="entry_challan_no")
+        material = st.text_input("Material", key="entry_material")
+        remarks = st.text_area("Narration (required)", key="entry_remarks", placeholder="Enter trip narration before saving")
+        suggested_rate = float(selected_vehicle.iloc[0]["fixed_rate"]) if not selected_vehicle.empty and pd.notna(selected_vehicle.iloc[0]["fixed_rate"]) else 0.0
+        rate = st.number_input("Rate (₹)", min_value=0.0, value=suggested_rate, step=100.0, key="entry_rate")
+        submitted = st.form_submit_button("Save Trip", type="primary", disabled=not allowed_plants, use_container_width=True)
 
-    # Hidden from the entry screen as requested; database columns are retained for existing records.
-    from_location = ""
-    from_type = ""
-    to_location = ""
-    to_type = ""
-    bill_ref = ""
-    material = st.text_input("Material", key="entry_material")
-    remarks = st.text_area("Narration (required)", key="entry_remarks", placeholder="Enter trip narration before saving")
-
-    suggested_rate = (
-        float(selected_vehicle.iloc[0]["fixed_rate"])
-        if not selected_vehicle.empty and pd.notna(selected_vehicle.iloc[0]["fixed_rate"])
-        else 0.0
-    )
-    rate = st.number_input(
-        "Rate (₹)", min_value=0.0, value=suggested_rate, step=100.0, key="entry_rate"
-    )
-
-    if st.button("Save Trip", type="primary", disabled=not allowed_plants, key="save_trip_button"):
+    if submitted:
         if not allowed_plants:
             st.error("No plant access assigned to this account.")
         elif not transporter or not vehicle_no:
             st.error("कृपया Transporter आणि Vehicle No. निवडा.")
+        elif selected_vehicle.empty or str(selected_vehicle.iloc[0]["transporter"]) != transporter:
+            st.error("निवडलेला Vehicle या Transporter चा नाही. कृपया योग्य Vehicle निवडा.")
         elif not remarks.strip():
             st.error("Trip save करण्यापूर्वी Narration लिहिणे आवश्यक आहे.")
         else:
             try:
                 trip_values = {
-                    "d": trip_date.isoformat(),
-                    "p": plant,
-                    "tt": transport_type,
-                    "tr": transporter,
-                    "v": vehicle_no,
-                    "vs": master_size,
-                    "ve": vendor,
-                    "pu": purpose,
-                    "fl": from_location,
-                    "ft": from_type,
-                    "tl": to_location,
-                    "to": to_type,
-                    "ch": challan_no,
-                    "br": bill_ref.strip(),
-                    "ma": material,
-                    "re": remarks,
-                    "ra": rate,
-                    "by": username,
-                    "at": now_text(),
+                    "d": trip_date.isoformat(), "p": plant, "tt": transport_type,
+                    "tr": transporter, "v": vehicle_no, "vs": master_size,
+                    "ve": vendor, "pu": purpose, "fl": "", "ft": "",
+                    "tl": "", "to": "", "ch": challan_no, "br": "",
+                    "ma": material, "re": remarks, "ra": rate,
+                    "by": username, "at": now_text(),
                 }
                 trip_id = insert_trip(trip_values)
-                audit(
-                    username, "CREATE", "trip", trip_id,
-                    f"plant={plant}; transporter={transporter}; vehicle={vehicle_no}",
-                )
-                st.session_state["reset_trip_entry_fields"] = True
-                st.success(f"Trip saved. Trip ID: {trip_id}")
+                audit(username, "CREATE", "trip", trip_id,
+                      f"plant={plant}; transporter={transporter}; vehicle={vehicle_no}")
+                # clear_on_submit clears all form widgets; rerun also refreshes the UI.
+                st.session_state["trip_saved_message"] = f"Trip saved successfully. Trip ID: {trip_id}. पुढील एन्ट्रीसाठी फॉर्म रिकामा केला आहे."
                 st.rerun()
             except Exception as exc:
                 st.error(f"Trip save failed: {exc}")
