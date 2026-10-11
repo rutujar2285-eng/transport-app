@@ -721,7 +721,18 @@ if is_admin:
                             st.rerun()
                         except Exception as exc:
                             st.error(f"Could not save vehicle: {exc}")
-            st.dataframe(read_df("SELECT * FROM vehicles ORDER BY vehicle_no"), use_container_width=True, hide_index=True)
+            vehicle_master_df = read_df("SELECT id, vehicle_no, transporter, vehicle_size, fixed_rate, active, local_trip_rate, vendor_trip_rate FROM vehicles ORDER BY vehicle_no")
+            if not vehicle_master_df.empty:
+                # fixed_rate is retained internally for compatibility with existing databases,
+                # but shown to users as the Other Rate (not as a separate Fixed Rate).
+                vehicle_master_df = vehicle_master_df.rename(columns={"fixed_rate": "other_rate"})
+                vehicle_master_df = vehicle_master_df[["id", "vehicle_no", "transporter", "vehicle_size", "local_trip_rate", "vendor_trip_rate", "other_rate", "active"]]
+                vehicle_master_df = vehicle_master_df.rename(columns={
+                    "local_trip_rate": "Local + Inter-plant Rate (₹)",
+                    "vendor_trip_rate": "Outward Rate (₹)",
+                    "other_rate": "Other Rate (₹)",
+                })
+            st.dataframe(vehicle_master_df, use_container_width=True, hide_index=True)
 
     with pages[5]:
         st.subheader("Audit Log")
