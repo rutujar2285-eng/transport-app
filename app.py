@@ -278,9 +278,17 @@ with pages[0]:
         st.warning("No plant access assigned to this account. Ask an admin to assign plant access.")
 
     trans_list, veh_df, vendor_list = load_trip_entry_masters()
-    # Put entry fields in one Streamlit form: the app will not rerun after every field.
-    # Vehicle choices include all master vehicles; the transporter/vehicle match is validated on save.
-    vehicle_options = veh_df["vehicle_no"].dropna().astype(str).tolist() if not veh_df.empty else []
+    # Transporter must be outside the form so Streamlit reruns immediately when it changes.
+    # This lets Vehicle No. options be filtered to that transporter before saving.
+    transporter = st.selectbox("Transporter", [""] + trans_list, key="entry_transporter")
+    if not veh_df.empty and transporter:
+        filtered_vehicles = veh_df[veh_df["transporter"].astype(str).str.strip() == str(transporter).strip()]
+    else:
+        filtered_vehicles = veh_df.iloc[0:0] if not veh_df.empty else pd.DataFrame()
+    vehicle_options = filtered_vehicles["vehicle_no"].dropna().astype(str).tolist() if not filtered_vehicles.empty else []
+    # Clear a previously selected vehicle if it does not belong to the current transporter.
+    if st.session_state.get("entry_vehicle_no", "") not in ([""] + vehicle_options):
+        st.session_state["entry_vehicle_no"] = ""
     c1, c2, c3 = st.columns(3)
     with st.form("new_trip_entry_form", clear_on_submit=True):
         c1, c2, c3 = st.columns(3)
@@ -289,9 +297,9 @@ with pages[0]:
         transport_type = c3.selectbox("Transport Type", ["", "Inward", "Outward", "Inter-plant", "Local", "Other"], key="entry_transport_type")
 
         c1, c2, c3 = st.columns(3)
-        transporter = c1.selectbox("Transporter", [""] + trans_list, key="entry_transporter")
+        c1.selectbox("Transporter", [""] + trans_list, key="entry_transporter_display", index=([""] + trans_list).index(transporter) if transporter in trans_list else 0, disabled=True)
         vehicle_no = c2.selectbox("Vehicle No.", [""] + vehicle_options, key="entry_vehicle_no")
-        selected_vehicle = veh_df[veh_df["vehicle_no"].astype(str) == vehicle_no] if vehicle_no and not veh_df.empty else pd.DataFrame()
+        selected_vehicle = filtered_vehicles[filtered_vehicles["vehicle_no"].astype(str) == vehicle_no] if vehicle_no and not filtered_vehicles.empty else pd.DataFrame()
         master_size = str(selected_vehicle.iloc[0]["vehicle_size"] or "") if not selected_vehicle.empty else ""
         if master_size.lower() == "nan":
             master_size = ""
