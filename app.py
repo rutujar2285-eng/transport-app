@@ -497,6 +497,12 @@ with pages[2]:
 
     if not rdf.empty:
         total_amount = pd.to_numeric(rdf["rate"], errors="coerce").fillna(0).sum()
+        # Hide internal/detail fields from Reports screen and exported Excel/PDF.
+        hidden_report_columns = [
+            "from_location", "from_type", "to_location", "to_type",
+            "bill_ref", "material", "remarks", "verified_by", "verified_at",
+        ]
+        report_df = rdf.drop(columns=hidden_report_columns, errors="ignore")
         st.metric("Total Trips", len(rdf))
         st.metric("Total Amount", f"₹{total_amount:,.2f}")
         c1, c2 = st.columns(2)
@@ -517,7 +523,7 @@ with pages[2]:
 
         xbuf = io.BytesIO()
         with pd.ExcelWriter(xbuf, engine="openpyxl") as writer:
-            rdf.to_excel(writer, index=False, sheet_name="Trips")
+            report_df.to_excel(writer, index=False, sheet_name="Trips")
             for label, column in summaries[:4]:
                 rdf.groupby(column, dropna=False, as_index=False).agg(
                     Trips=("id", "count"), Amount=("rate", "sum")
@@ -533,7 +539,7 @@ with pages[2]:
             topMargin=20, bottomMargin=20,
         )
         styles = getSampleStyleSheet()
-        table_data = [list(map(str, rdf.columns))] + rdf.fillna("").astype(str).values.tolist()
+        table_data = [list(map(str, report_df.columns))] + report_df.fillna("").astype(str).values.tolist()
         report_table = Table(table_data, repeatRows=1)
         report_table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#12304a")),
