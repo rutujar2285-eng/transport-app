@@ -129,27 +129,6 @@ def options(sql, column):
     return df[column].dropna().astype(str).tolist() if not df.empty else []
 
 
-@st.cache_data(ttl=20, show_spinner=False)
-def load_trip_entry_masters():
-    """Cache entry dropdown master data briefly to reduce database round-trips."""
-    with engine.connect() as conn:
-        trans_df = pd.read_sql(
-            text("SELECT name FROM transporters WHERE active=1 ORDER BY name"), conn
-        )
-        vehicle_df = pd.read_sql(
-            text("SELECT vehicle_no, transporter, vehicle_size, fixed_rate "
-                 "FROM vehicles WHERE active=1 ORDER BY vehicle_no"), conn
-        )
-        vendor_df = pd.read_sql(
-            text("SELECT name FROM vendors WHERE active=1 ORDER BY name"), conn
-        )
-    return (
-        trans_df["name"].dropna().astype(str).tolist() if not trans_df.empty else [],
-        vehicle_df,
-        vendor_df["name"].dropna().astype(str).tolist() if not vendor_df.empty else [],
-    )
-
-
 def insert_trip(values):
     """Insert a trip and return its ID in both PostgreSQL and SQLite."""
     if engine.dialect.name == "postgresql":
@@ -262,8 +241,12 @@ with pages[0]:
     if not allowed_plants:
         st.warning("No plant access assigned to this account. Ask an admin to assign plant access.")
 
-    # Cached for 20 seconds: dropdown edits no longer query all three master tables each time.
-    trans_list, veh_df, vendor_list = load_trip_entry_masters()
+    trans_list = options("SELECT name FROM transporters WHERE active=1 ORDER BY name", "name")
+    veh_df = read_df(
+        "SELECT vehicle_no, transporter, vehicle_size, fixed_rate "
+        "FROM vehicles WHERE active=1 ORDER BY vehicle_no"
+    )
+    vendor_list = options("SELECT name FROM vendors WHERE active=1 ORDER BY name", "name")
 
     # Keep the vehicle selector outside a form so it refreshes immediately when transporter changes.
     c1, c2, c3 = st.columns(3)
