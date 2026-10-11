@@ -7,7 +7,7 @@ You are an expert full-stack software engineer. Build a complete, production-rea
    - Admins have exclusive rights to Master Data modifications and Trip Deletions.
 
 2. Master Data Management (Admin Only for Add/Delete):
-   - Transport Master Data: Transporter Name, Vehicle No., Vehicle Size, Plant/Base, Fixed Rate/Trip (₹), Status.
+   - Transport Master Data: Transporter Name, Vehicle No., Vehicle Size, Plant/Base, Fixed Rate/Trip (Rs.), Status.
    - Vendor Master Data: Vendor Name, Address, Status.
    - Vehicle Size / Fixed Rate Master: Mapping sizes to rates.
 
