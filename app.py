@@ -348,6 +348,8 @@ with pages[0]:
                 st.error(f"Trip save failed: {exc}")
 
 with pages[1]:
+    if st.session_state.get("trip_delete_notice"):
+        st.success(st.session_state.pop("trip_delete_notice"))
     st.subheader("Trip Register")
     f1, f2, f3 = st.columns(3)
     d1 = f1.date_input("From Date", value=date.today().replace(day=1), key="reg_from", format="DD-MM-YYYY")
@@ -378,6 +380,36 @@ with pages[1]:
         "trip_register.csv", "text/csv"
     )
 
+    # Bulk deletion is deliberately restricted to admins and requires typed confirmation.
+    if is_admin:
+        with st.expander("⚠️ Admin only — सर्व Trip Entries delete करा"):
+            total_trip_count = int(read_df("SELECT COUNT(*) AS n FROM trips").iloc[0]["n"])
+            st.warning(
+                f"या कृतीने सर्व Plants मधील {total_trip_count} Trip Entries कायमच्या delete होतील. "
+                "ही कृती Undo करता येणार नाही. आधी Database Backup घ्या."
+            )
+            bulk_delete_phrase = st.text_input(
+                'पुष्टीसाठी खाली DELETE ALL TRIPS टाइप करा', key="bulk_delete_trip_phrase"
+            )
+            if st.button(
+                "Delete ALL Trip Entries", key="bulk_delete_all_trips",
+                type="primary", disabled=(bulk_delete_phrase != "DELETE ALL TRIPS" or total_trip_count == 0)
+            ):
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text("DELETE FROM trips"))
+                    audit(username, "DELETE_ALL", "trip", "ALL", f"Bulk deleted {total_trip_count} trips from Trip Register")
+                    st.session_state.pop("edit_trip_id", None)
+                    st.session_state.pop("bulk_delete_trip_phrase", None)
+                    # Clear cached Streamlit data so reports/register refresh from the database.
+                    st.cache_data.clear()
+                    st.session_state["trip_delete_notice"] = f"सर्व {total_trip_count} Trip Entries delete केल्या. Reports मधील आकडे refresh झाले आहेत."
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Bulk delete failed: {exc}")
+    else:
+        st.caption("सर्व Trip Entries delete करण्याचा पर्याय फक्त Admin ला उपलब्ध आहे.")
+
     if not df.empty:
         trip_ids = df["id"].astype(int).tolist()
         chosen_id = st.selectbox("Edit / Delete साठी Trip ID निवडा", trip_ids, key="manage_trip_id")
@@ -402,7 +434,9 @@ with pages[1]:
                             conn.execute(text("DELETE FROM trips WHERE id=:id"), {"id": int(chosen_id)})
                         audit(username, "DELETE", "trip", chosen_id, "Deleted from Trip Register")
                         st.session_state.pop("edit_trip_id", None)
-                        st.success(f"Trip ID {chosen_id} deleted.")
+                        # Invalidate cached data after delete; all reports query the trips table.
+                        st.cache_data.clear()
+                        st.session_state["trip_delete_notice"] = f"Trip ID {chosen_id} delete झाली. Reports मधूनही ती वगळली आहे."
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Trip delete failed: {exc}")
@@ -484,6 +518,8 @@ with pages[1]:
                                 st.error(f"Trip update failed: {exc}")
 
 with pages[2]:
+    if st.session_state.get("trip_delete_notice"):
+        st.success(st.session_state.pop("trip_delete_notice"))
     st.subheader("Transport Reports")
     st.caption("निवडलेल्या कालावधीतील ट्रिपचा सेव्ह केलेला रेट/Amount वापरला जातो. Vehicle Master मधील नवीन रेट जुन्या ट्रिपवर लागू होत नाही.")
     r1, r2 = st.columns(2)
