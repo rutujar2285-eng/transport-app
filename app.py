@@ -6,7 +6,7 @@ st.write("Welcome to the Transport Management App for managing vehicle dispatche
 # Simple input form placeholder
 transporter = st.text_input("Transporter Name")
 vehicle_no = st.text_input("Vehicle No.")
-plant = st.selectbox("Select Plant", ["Plant 1", "Plant 2", "Plant 3", "Plant 4", "Plant 5"])
+plant = st.selectbox("Select Plant", ["Plant 1 = J BLOCK", "Plant 2 = F-2 BLOCK", "Plant 3 = T BLOCK", "Plant 4 = S BLOCK", "Plant 5 = GAURI BLOCK"])
 rate = st.number_input("Fixed Rate (Rs.)", min_value=0.0)
 
 if st.button("Save Trip"):
