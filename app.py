@@ -99,16 +99,29 @@ if not st.session_state.user:
         uname = st.text_input("Username")
         pwd = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Login", type="primary")
+        
         if submitted:
             record = users.get(uname)
-            if record and pw_ok(pwd, str(record.get("password", ""))):
-                st.session_state.user = {"username": uname, "role": record.get("role", "operator"), "plants": record.get("plants", PLANTS)}
+            if record and pw_ok(
+                pwd,
+                str(record.get("password", "")) if isinstance(record, dict) else str(record)
+            ):
+                if isinstance(record, dict):
+                    role = record.get("role", "operator")
+                    plants = record.get("plants", PLANTS)
+                else:
+                    role = "admin" if uname == "admin" else "operator"
+                    plants = PLANTS
+
+                st.session_state.user = {
+                    "username": uname,
+                    "role": role,
+                    "plants": plants
+                }
                 st.rerun()
             else:
                 st.error("Invalid username or password.")
-    st.stop()
-
-user = st.session_state.user
+        st.stop()
 username, role = user["username"], user["role"].lower()
 is_admin = role == "admin"
 allowed_plants = PLANTS if is_admin else [p for p in user.get("plants", []) if p in PLANTS]
