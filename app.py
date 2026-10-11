@@ -230,6 +230,7 @@ with pages[0]:
     st.subheader("New Trip Entry")
     if not allowed_plants:
         st.warning("No plant access assigned to this account. Ask an admin to assign plant access.")
+
     trans_list = options("SELECT name FROM transporters WHERE active=1 ORDER BY name", "name")
     veh_df = read_df(
         "SELECT vehicle_no, transporter, vehicle_size, fixed_rate "
@@ -237,87 +238,116 @@ with pages[0]:
     )
     vendor_list = options("SELECT name FROM vendors WHERE active=1 ORDER BY name", "name")
 
-    with st.form("trip_entry", clear_on_submit=True):
-        c1, c2, c3 = st.columns(3)
-        trip_date = c1.date_input("Trip Date", value=datetime.now(TZ).date(), format="DD-MM-YYYY")
-        plant = c2.selectbox(
-            "Plant",
-            allowed_plants if allowed_plants else ["No plant access"],
-            disabled=not allowed_plants,
-        )
-        transport_type = c3.selectbox(
-            "Transport Type", ["", "Inward", "Outward", "Inter-plant", "Local", "Other"]
-        )
-        transporter = c1.selectbox("Transporter", [""] + trans_list)
-        matching_vehicles = (
-            veh_df[veh_df["transporter"] == transporter]
-            if transporter and not veh_df.empty
-            else veh_df.iloc[0:0]
-        )
-        vehicle_options = matching_vehicles["vehicle_no"].astype(str).tolist()
-        vehicle_no = c2.selectbox("Vehicle No.", [""] + vehicle_options)
-        vehicle_size = c3.text_input("Vehicle Size (if not in master)")
-        vendor = c1.selectbox("Vendor", [""] + vendor_list)
-        purpose = c2.text_input("Purpose")
-        challan_no = c3.text_input("Challan No.")
-        from_location = c1.text_input("From Location")
-        from_type = c2.selectbox(
-            "From Type", ["", "Plant", "Vendor", "Customer", "Warehouse", "Other"]
-        )
-        to_location = c3.text_input("To Location")
-        to_type = c1.selectbox(
-            "To Type", ["", "Plant", "Vendor", "Customer", "Warehouse", "Other"]
-        )
-        bill_ref = c2.text_input("Bill / Invoice Reference (optional)")
-        material = c3.text_input("Material")
-        remarks = st.text_area("Remarks")
-        matched = (
-            matching_vehicles[matching_vehicles["vehicle_no"] == vehicle_no]
-            if vehicle_no
-            else pd.DataFrame()
-        )
-        suggested_rate = float(matched.iloc[0]["fixed_rate"]) if not matched.empty else 0.0
-        rate = st.number_input("Rate (₹)", min_value=0.0, value=suggested_rate, step=100.0)
-        save = st.form_submit_button("Save Trip", type="primary", disabled=not allowed_plants)
+    # Keep the vehicle selector outside a form so it refreshes immediately when transporter changes.
+    c1, c2, c3 = st.columns(3)
+    trip_date = c1.date_input("Trip Date", value=datetime.now(TZ).date(), format="DD-MM-YYYY", key="entry_trip_date")
+    plant = c2.selectbox(
+        "Plant", allowed_plants if allowed_plants else ["No plant access"],
+        disabled=not allowed_plants, key="entry_plant"
+    )
+    transport_type = c3.selectbox(
+        "Transport Type", ["", "Inward", "Outward", "Inter-plant", "Local", "Other"],
+        key="entry_transport_type"
+    )
 
-        if save:
-            if not allowed_plants:
-                st.error("No plant access assigned to this account.")
-            elif not transporter or not vehicle_no:
-                st.error("Transporter आणि Vehicle No. निवडा.")
-            else:
-                try:
-                    trip_values = {
-                        "d": trip_date.isoformat(),
-                        "p": plant,
-                        "tt": transport_type,
-                        "tr": transporter,
-                        "v": vehicle_no,
-                        "vs": vehicle_size or (
-                            str(matched.iloc[0]["vehicle_size"]) if not matched.empty else ""
-                        ),
-                        "ve": vendor,
-                        "pu": purpose,
-                        "fl": from_location,
-                        "ft": from_type,
-                        "tl": to_location,
-                        "to": to_type,
-                        "ch": challan_no,
-                        "br": bill_ref.strip(),
-                        "ma": material,
-                        "re": remarks,
-                        "ra": rate,
-                        "by": username,
-                        "at": now_text(),
-                    }
-                    trip_id = insert_trip(trip_values)
-                    audit(
-                        username, "CREATE", "trip", trip_id,
-                        f"plant={plant}; transporter={transporter}; vehicle={vehicle_no}",
-                    )
-                    st.success(f"Trip saved. Trip ID: {trip_id}")
-                except Exception as exc:
-                    st.error(f"Trip save failed: {exc}")
+    c1, c2, c3 = st.columns(3)
+    transporter = c1.selectbox("Transporter", [""] + trans_list, key="entry_transporter")
+    matching_vehicles = (
+        veh_df[veh_df["transporter"] == transporter]
+        if transporter and not veh_df.empty
+        else veh_df.iloc[0:0]
+    )
+    vehicle_options = matching_vehicles["vehicle_no"].astype(str).tolist()
+    vehicle_no = c2.selectbox(
+        "Vehicle No.", [""] + vehicle_options, key="entry_vehicle_no",
+        help="Transporter निवडल्यानंतर त्या transporter ची vehicles लगेच दिसतील."
+    )
+    selected_vehicle = (
+        matching_vehicles[matching_vehicles["vehicle_no"] == vehicle_no]
+        if vehicle_no else pd.DataFrame()
+    )
+    master_size = (
+        str(selected_vehicle.iloc[0]["vehicle_size"] or "")
+        if not selected_vehicle.empty else ""
+    )
+    if master_size.lower() == "nan":
+        master_size = ""
+    vehicle_size = c3.text_input(
+        "Vehicle Size (from master)", value=master_size, disabled=True,
+        key="entry_vehicle_size_display",
+        help="Vehicle Master मध्ये नोंदवलेला size येथे आपोआप दिसेल."
+    )
+
+    c1, c2, c3 = st.columns(3)
+    vendor = c1.selectbox("Vendor", [""] + vendor_list, key="entry_vendor")
+    purpose = c2.selectbox(
+        "Purpose", ["", "Dispatch", "Local Trip", "Vendor"], key="entry_purpose"
+    )
+    challan_no = c3.text_input("Challan No.", key="entry_challan_no")
+
+    c1, c2, c3 = st.columns(3)
+    from_location = c1.text_input("From Location", key="entry_from_location")
+    from_type = c2.selectbox(
+        "From Type", ["", "Plant", "Vendor", "Customer", "Warehouse", "Other"],
+        key="entry_from_type"
+    )
+    to_location = c3.text_input("To Location", key="entry_to_location")
+
+    c1, c2, c3 = st.columns(3)
+    to_type = c1.selectbox(
+        "To Type", ["", "Plant", "Vendor", "Customer", "Warehouse", "Other"],
+        key="entry_to_type"
+    )
+    bill_ref = c2.text_input("Bill / Invoice Reference (optional)", key="entry_bill_ref")
+    material = c3.text_input("Material", key="entry_material")
+    remarks = st.text_area("Remarks", key="entry_remarks")
+
+    suggested_rate = (
+        float(selected_vehicle.iloc[0]["fixed_rate"])
+        if not selected_vehicle.empty and pd.notna(selected_vehicle.iloc[0]["fixed_rate"])
+        else 0.0
+    )
+    rate = st.number_input(
+        "Rate (₹)", min_value=0.0, value=suggested_rate, step=100.0, key="entry_rate"
+    )
+
+    if st.button("Save Trip", type="primary", disabled=not allowed_plants, key="save_trip_button"):
+        if not allowed_plants:
+            st.error("No plant access assigned to this account.")
+        elif not transporter or not vehicle_no:
+            st.error("कृपया Transporter आणि Vehicle No. निवडा.")
+        else:
+            try:
+                trip_values = {
+                    "d": trip_date.isoformat(),
+                    "p": plant,
+                    "tt": transport_type,
+                    "tr": transporter,
+                    "v": vehicle_no,
+                    "vs": master_size,
+                    "ve": vendor,
+                    "pu": purpose,
+                    "fl": from_location,
+                    "ft": from_type,
+                    "tl": to_location,
+                    "to": to_type,
+                    "ch": challan_no,
+                    "br": bill_ref.strip(),
+                    "ma": material,
+                    "re": remarks,
+                    "ra": rate,
+                    "by": username,
+                    "at": now_text(),
+                }
+                trip_id = insert_trip(trip_values)
+                audit(
+                    username, "CREATE", "trip", trip_id,
+                    f"plant={plant}; transporter={transporter}; vehicle={vehicle_no}",
+                )
+                st.success(f"Trip saved. Trip ID: {trip_id}")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Trip save failed: {exc}")
 
 with pages[1]:
     st.subheader("Trip Register")
