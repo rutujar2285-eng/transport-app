@@ -190,15 +190,36 @@ init_db()
 st.markdown("""
 <style>
 :root { color-scheme: light; }
-.stApp { background: linear-gradient(135deg, #eef0f2 0%, #dfe2e6 52%, #f5f6f7 100%); color: #29323b; }
-[data-testid="stHeader"] { background: rgba(225, 228, 232, 0.88); }
-[data-testid="stSidebar"] { background: linear-gradient(180deg, #d9dde1 0%, #c8cdd2 100%); }
-[data-testid="stVerticalBlockBorderWrapper"] { border-color: #c5cbd1 !important; }
-.stTextInput input, .stNumberInput input, .stDateInput input, .stSelectbox div[data-baseweb="select"] > div, .stTextArea textarea { background-color: #e1e4e8 !important; border-color: #c5cbd1 !important; color: #29323b !important; }
-.stButton button, .stFormSubmitButton button { background: linear-gradient(135deg, #68727c, #4c5661) !important; color: #ffffff !important; border: 1px solid #59636d !important; }
-.stButton button:hover, .stFormSubmitButton button:hover { background: linear-gradient(135deg, #56616b, #3f4851) !important; border-color: #434d57 !important; }
-[data-testid="stMetric"] { background: rgba(222, 226, 230, 0.8); border: 1px solid #c8cdd2; padding: 12px; border-radius: 10px; }
-hr { border-color: #c5cbd1 !important; }
+.stApp {
+  background: radial-gradient(ellipse at 18% 8%, rgba(255,255,255,.98) 0%, rgba(239,242,246,.96) 28%, transparent 58%),
+              linear-gradient(135deg, #cbd1d9 0%, #edf0f4 46%, #d4dae2 100%);
+  color: #293847;
+}
+[data-testid="stHeader"] { background: rgba(232,236,241,.72); }
+[data-testid="stSidebar"] { background: linear-gradient(180deg,#e3e7ec 0%,#c5ccd5 100%); border-right: 1px solid #b8c2ce; }
+[data-testid="stVerticalBlockBorderWrapper"] { border-color: #c2ccd7 !important; }
+[data-testid="stForm"] {
+  background: linear-gradient(145deg,rgba(255,255,255,.92),rgba(229,234,240,.82)) !important;
+  border: 1px solid rgba(184,197,211,.95) !important; border-radius: 18px !important;
+  padding: 1.25rem 1.35rem !important;
+  box-shadow: 0 14px 32px rgba(56,70,87,.13), inset 0 1px 0 rgba(255,255,255,.98) !important;
+}
+.stTextInput input, .stNumberInput input, .stDateInput input, .stSelectbox div[data-baseweb="select"] > div, .stTextArea textarea {
+  background: linear-gradient(180deg,#f4f6f9 0%,#e1e6ed 100%) !important;
+  border: 1px solid #c4ceda !important; border-radius: 10px !important; color: #293847 !important;
+  box-shadow: inset 0 1px 2px rgba(50,65,80,.06), 0 1px 0 rgba(255,255,255,.8) !important;
+}
+.stTextInput input:focus, .stSelectbox div[data-baseweb="select"] > div:focus-within { border-color:#8d9eaf !important; box-shadow:0 0 0 3px rgba(126,147,169,.18) !important; }
+.stButton button, .stFormSubmitButton button {
+  background: linear-gradient(180deg,#778797 0%,#465564 52%,#344250 100%) !important;
+  color:#fff !important; border:1px solid #667787 !important; border-radius:10px !important;
+  box-shadow:0 5px 12px rgba(45,59,73,.22), inset 0 1px 0 rgba(255,255,255,.38) !important;
+  font-weight:700 !important; transition:all .18s ease-in-out;
+}
+.stButton button:hover, .stFormSubmitButton button:hover { background:linear-gradient(180deg,#8797a7,#3b4a59) !important; transform:translateY(-1px); box-shadow:0 7px 15px rgba(45,59,73,.26),inset 0 1px 0 rgba(255,255,255,.42) !important; }
+[data-testid="stMetric"] { background:linear-gradient(145deg,rgba(255,255,255,.88),rgba(219,225,232,.88)); border:1px solid #c5ced8; padding:12px; border-radius:12px; box-shadow:0 4px 12px rgba(55,70,85,.08); }
+h1,h2,h3 { color:#2e4051 !important; }
+hr { border-color:#c5cdd6 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -233,10 +254,13 @@ if "user" not in st.session_state:
 if not st.session_state.user:
     with st.form("login"):
         st.subheader("Secure Login")
-        uname = st.text_input("Username").strip()
+        username_options = ["Select your username"] + sorted(str(name) for name in users.keys())
+        uname = st.selectbox("Username", username_options, index=0, key="login_username")
         pwd = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Login", type="primary")
-        if submitted:
+        if submitted and uname == "Select your username":
+            st.warning("Please select your username from the dropdown.")
+        elif submitted:
             record = users.get(uname)
             expected = (
                 str(record.get("password", ""))
