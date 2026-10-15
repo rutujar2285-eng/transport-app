@@ -194,8 +194,8 @@ st.markdown(
                 border-bottom:2px solid #c9e2ff;border-radius:10px;">
       <img src="{_DIVINE_LOGO}" style="width:96px;height:96px;object-fit:contain;flex-shrink:0;" />
       <div style="border-left:2px solid #2677d9;padding-left:20px;">
-        <div style="font-size:clamp(25px,3.1vw,42px);font-weight:850;letter-spacing:1px;line-height:1.1;color:#1261b5;">DIVINE TOOLING</div>
-        <div style="font-size:clamp(15px,1.8vw,25px);font-weight:750;letter-spacing:.5px;line-height:1.35;color:#1873cc;margin-top:7px;">TRANSPORT SYSTEM BY CHETAN</div>
+        <div style="font-size:clamp(22px,2.7vw,36px);font-weight:850;letter-spacing:.4px;line-height:1.15;color:#263746;">ELYON DIVINE TRANSPORT MANAGEMENT SYSTEM (TMS)</div>
+        <div style="font-size:clamp(14px,1.5vw,19px);font-weight:600;line-height:1.35;color:#526273;margin-top:7px;">Created by चेतन</div>
         <div style="height:3px;max-width:720px;margin-top:10px;background:linear-gradient(90deg,#1675d1,#b9dcff,transparent);"></div>
       </div>
     </div>''',
