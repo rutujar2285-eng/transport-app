@@ -740,8 +740,15 @@ with pages[3]:
             use_container_width=True,
             hide_index=True,
             key="trip_verification_checklist",
-            disabled=[c for c in checklist.columns if c != "Select"],
+            # Bill Ref is intentionally editable so the transporter invoice number
+            # can be entered directly in the verification table.
+            disabled=[c for c in checklist.columns if c not in ("Select", "Bill Ref")],
             column_config={
+                "Bill Ref": st.column_config.TextColumn(
+                    "Bill Ref (Transporter Bill No.)",
+                    help="ट्रान्सपोर्टरच्या बिलावर असलेला बिल नंबर येथे लिहा.",
+                    required=False,
+                ),
                 "Select": st.column_config.CheckboxColumn(
                     "✓ Select", help="Verify करायच्या प्रत्येक ट्रिपसमोर टिक करा.", default=False
                 ),
@@ -750,6 +757,30 @@ with pages[3]:
                 "Status": st.column_config.TextColumn("Status"),
             },
         )
+        # Save edited transporter bill numbers without forcing the user to verify
+        # the trip immediately.
+        if st.button("💾 Save Bill Ref Changes", key="save_bill_ref_changes"):
+            saved_count = 0
+            try:
+                with engine.begin() as conn:
+                    for _, edited_row in edited_checklist.iterrows():
+                        trip_id = int(edited_row["Trip ID"])
+                        new_bill = "" if pd.isna(edited_row["Bill Ref"]) else str(edited_row["Bill Ref"]).strip()
+                        old_rows = vdf[vdf["id"].astype(int) == trip_id]
+                        old_bill = "" if old_rows.empty or pd.isna(old_rows.iloc[0]["bill_ref"]) else str(old_rows.iloc[0]["bill_ref"]).strip()
+                        if new_bill != old_bill:
+                            conn.execute(
+                                text("UPDATE trips SET bill_ref=:bill WHERE id=:id AND status != 'Verified'"),
+                                {"bill": new_bill, "id": trip_id},
+                            )
+                            audit(username, "UPDATE", "trip", trip_id, f"bill_ref={new_bill}")
+                            saved_count += 1
+                st.cache_data.clear()
+                st.success(f"{saved_count} ट्रिपचे Bill Ref सेव्ह केले.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Bill Ref सेव्ह करता आले नाही: {exc}")
+
         action1, action2 = st.columns([1, 2])
         with action1:
             select_all = st.checkbox("सर्व Pending निवडा", key="verify_select_all")
@@ -776,7 +807,14 @@ with pages[3]:
                         if selected_row.empty:
                             continue
                         row = selected_row.iloc[0]
-                        bill = str(row["bill_ref"] or "").strip()
+                        edited_rows = edited_checklist[edited_checklist["Trip ID"].astype(int) == selected_id]
+                        edited_bill = "" if edited_rows.empty or pd.isna(edited_rows.iloc[0]["Bill Ref"]) else str(edited_rows.iloc[0]["Bill Ref"]).strip()
+                        bill = edited_bill
+                        # Persist the entered bill number as part of this same verification transaction.
+                        conn.execute(
+                            text("UPDATE trips SET bill_ref=:bill WHERE id=:id AND status != 'Verified'"),
+                            {"bill": bill, "id": selected_id},
+                        )
                         current = conn.execute(
                             text("SELECT status FROM trips WHERE id=:id"), {"id": selected_id}
                         ).first()
@@ -803,9 +841,9 @@ with pages[3]:
                         if result.rowcount:
                             verified_ids.append(selected_id)
                 for selected_id in verified_ids:
-                    row = vdf[vdf["id"].astype(int) == selected_id].iloc[0]
-                    audit(username, "VERIFY", "trip", selected_id,
-                          f"bill_ref={str(row['bill_ref'] or '').strip()}")
+                    edited_rows = edited_checklist[edited_checklist["Trip ID"].astype(int) == selected_id]
+                    bill_value = "" if edited_rows.empty or pd.isna(edited_rows.iloc[0]["Bill Ref"]) else str(edited_rows.iloc[0]["Bill Ref"]).strip()
+                    audit(username, "VERIFY", "trip", selected_id, f"bill_ref={bill_value}")
                 st.cache_data.clear()
                 if verified_ids:
                     st.success(f"यशस्वी! {len(verified_ids)} ट्रिप Verified केल्या. IDs: {', '.join(map(str, verified_ids))}")
