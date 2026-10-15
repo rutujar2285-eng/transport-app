@@ -140,9 +140,13 @@ def style_status_columns(df):
     """Render Verified status green and Pending status yellow in visible tables."""
     if df is None or df.empty:
         return df
-    status_columns = [col for col in df.columns if str(col).strip().lower() in ("status", "trip status")]
+    status_columns = [
+        col for col in df.columns
+        if str(col).strip().lower() in ("status", "trip status")
+    ]
     if not status_columns:
         return df
+
     def status_color(value):
         value = str(value).strip().lower()
         if value == "verified":
@@ -150,7 +154,13 @@ def style_status_columns(df):
         if value == "pending":
             return "background-color: #fef3c7; color: #92400e; font-weight: 700;"
         return ""
-    return df.style.applymap(status_color, subset=status_columns)
+
+    # Build a style DataFrame and use Styler.apply(axis=None), avoiding
+    # Styler.applymap which is removed in newer pandas versions.
+    styles = pd.DataFrame("", index=df.index, columns=df.columns)
+    for col in status_columns:
+        styles[col] = df[col].map(status_color)
+    return df.style.apply(lambda _: styles, axis=None)
 
 
 def options(sql, column):
