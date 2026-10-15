@@ -150,8 +150,8 @@ def load_trip_entry_masters():
     )
 
 
-def insert_trip(values):
-    """Insert a trip and return its ID in both PostgreSQL and SQLite."""
+def insert_trip(values, audit_user=None, audit_details=""):
+    """Insert trip and audit record in one DB transaction to reduce save latency."""
     if engine.dialect.name == "postgresql":
         statement = text("""INSERT INTO trips
             (trip_date, plant, transport_type, transporter, vehicle_no, vehicle_size,
@@ -161,7 +161,14 @@ def insert_trip(values):
                     :ch, :br, :ma, :re, :ra, 'Pending', :by, :at)
             RETURNING id""")
         with engine.begin() as conn:
-            return conn.execute(statement, values).scalar_one()
+            trip_id = conn.execute(statement, values).scalar_one()
+            if audit_user:
+                conn.execute(text("""INSERT INTO audit_log
+                    (username, action, entity, entity_id, details, created_at)
+                    VALUES (:u, 'CREATE', 'trip', :i, :d, :t)"""),
+                    {"u": audit_user, "i": str(trip_id), "d": audit_details, "t": now_text()})
+            return trip_id
+
     statement = text("""INSERT INTO trips
         (trip_date, plant, transport_type, transporter, vehicle_no, vehicle_size,
          vendor, purpose, from_location, from_type, to_location, to_type,
@@ -170,7 +177,13 @@ def insert_trip(values):
                 :ch, :br, :ma, :re, :ra, 'Pending', :by, :at)""")
     with engine.begin() as conn:
         result = conn.execute(statement, values)
-        return result.lastrowid
+        trip_id = result.lastrowid
+        if audit_user:
+            conn.execute(text("""INSERT INTO audit_log
+                (username, action, entity, entity_id, details, created_at)
+                VALUES (:u, 'CREATE', 'trip', :i, :d, :t)"""),
+                {"u": audit_user, "i": str(trip_id), "d": audit_details, "t": now_text()})
+        return trip_id
 
 
 init_db()
@@ -367,12 +380,13 @@ with pages[0]:
                     "ma": material, "re": remarks, "ra": rate,
                     "by": username, "at": now_text(),
                 }
-                trip_id = insert_trip(trip_values)
-                audit(username, "CREATE", "trip", trip_id,
-                      f"plant={plant}; transporter={transporter}; vehicle={vehicle_no}")
-                # clear_on_submit clears all form widgets; rerun also refreshes the UI.
-                st.session_state["trip_saved_message"] = f"Trip saved successfully. Trip ID: {trip_id}. पुढील एन्ट्रीसाठी फॉर्म रिकामा केला आहे."
-                st.rerun()
+                trip_id = insert_trip(
+                    trip_values,
+                    audit_user=username,
+                    audit_details=f"plant={plant}; transporter={transporter}; vehicle={vehicle_no}",
+                )
+                # The form submission already reruns the script; avoid a second forced rerun.
+                st.success(f"Trip saved successfully. Trip ID: {trip_id}. पुढील एन्ट्रीसाठी फॉर्म रिकामा आहे.")
             except Exception as exc:
                 st.error(f"Trip save failed: {exc}")
 
