@@ -136,6 +136,23 @@ def read_df(sql, params=None):
         return pd.read_sql(text(sql), conn, params=params or {})
 
 
+def style_status_columns(df):
+    """Render Verified status green and Pending status yellow in visible tables."""
+    if df is None or df.empty:
+        return df
+    status_columns = [col for col in df.columns if str(col).strip().lower() in ("status", "trip status")]
+    if not status_columns:
+        return df
+    def status_color(value):
+        value = str(value).strip().lower()
+        if value == "verified":
+            return "background-color: #d1fae5; color: #065f46; font-weight: 700;"
+        if value == "pending":
+            return "background-color: #fef3c7; color: #92400e; font-weight: 700;"
+        return ""
+    return df.style.applymap(status_color, subset=status_columns)
+
+
 def options(sql, column):
     df = read_df(sql)
     return df[column].dropna().astype(str).tolist() if not df.empty else []
@@ -444,7 +461,7 @@ with pages[1]:
         df["Possible Duplicate"] = df.duplicated(subset=duplicate_key, keep=False) & df["challan_no"].fillna("").astype(str).str.strip().ne("")
         if df["Possible Duplicate"].any():
             st.warning("Possible duplicate trips दिसत आहेत. खालील नोंदी तपासा; योग्य नोंद निवडून Delete करा.")
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(style_status_columns(df), use_container_width=True, hide_index=True)
     st.download_button(
         "Download Register CSV", df.to_csv(index=False).encode("utf-8-sig"),
         "trip_register.csv", "text/csv"
@@ -643,7 +660,7 @@ with pages[2]:
             detail = rdf[display_cols].copy()
             detail["trip_date"] = pd.to_datetime(detail["trip_date"], errors="coerce").dt.strftime("%d-%m-%Y")
             detail = detail.rename(columns={"id":"Trip ID", "trip_date":"Date", "plant":"Plant", "transport_type":"Transport Type", "transporter":"Transporter", "vehicle_no":"Vehicle No.", "vendor":"Vendor", "challan_no":"Challan No.", "rate":"Saved Amount (₹)", "status":"Status"})
-            st.dataframe(detail, use_container_width=True, hide_index=True)
+            st.dataframe(style_status_columns(detail), use_container_width=True, hide_index=True)
 
         xbuf = io.BytesIO()
         with pd.ExcelWriter(xbuf, engine="openpyxl") as writer:
@@ -685,55 +702,121 @@ with pages[2]:
 
 with pages[3]:
     st.subheader("Trip Verification")
+    st.caption(
+        "वेळ वाचवण्यासाठी अनेक ट्रिप एकाच वेळी निवडा आणि Verify Selected Trips दाबा. "
+        "डेटाबेसमध्ये एकाच बॅचमध्ये पडताळणी होईल."
+    )
     vdf = read_df("""SELECT id, trip_date, plant, transporter, vehicle_no, vendor,
         bill_ref, challan_no, rate, status, created_by FROM trips
         WHERE status != 'Verified' ORDER BY trip_date, id""")
     if not is_admin:
         vdf = vdf[vdf["plant"].isin(allowed_plants)]
-    st.dataframe(vdf, use_container_width=True, hide_index=True)
 
     if not vdf.empty:
-        trip_id = st.selectbox("Select Trip ID to verify", vdf["id"].tolist())
-        selected = vdf[vdf["id"] == trip_id].iloc[0]
-        st.write(f"**{selected.transporter}** • {selected.vehicle_no} • ₹{float(selected.rate):,.2f}")
-        confirm = st.checkbox("I checked this trip and supporting documents.")
-        if st.button("Verify Trip", type="primary", disabled=not confirm):
-            bill = str(selected["bill_ref"] or "").strip()
+        checklist = vdf[[
+            "id", "trip_date", "plant", "transporter", "vehicle_no",
+            "vendor", "bill_ref", "challan_no", "rate", "status"
+        ]].copy()
+        checklist.insert(0, "Select", False)
+        checklist = checklist.rename(columns={
+            "id": "Trip ID", "trip_date": "Trip Date", "plant": "Plant",
+            "transporter": "Transporter", "vehicle_no": "Vehicle No.",
+            "vendor": "Vendor", "bill_ref": "Bill Ref",
+            "challan_no": "Challan No.", "rate": "Amount (₹)", "status": "Status"
+        })
+        st.caption(f"Pending Trips: {len(checklist)}")
+        edited_checklist = st.data_editor(
+            checklist,
+            use_container_width=True,
+            hide_index=True,
+            key="trip_verification_checklist",
+            disabled=[c for c in checklist.columns if c != "Select"],
+            column_config={
+                "Select": st.column_config.CheckboxColumn(
+                    "✓ Select", help="Verify करायच्या प्रत्येक ट्रिपसमोर टिक करा.", default=False
+                ),
+                "Trip ID": st.column_config.NumberColumn("Trip ID", format="%d"),
+                "Amount (₹)": st.column_config.NumberColumn("Amount (₹)", format="₹%.2f"),
+                "Status": st.column_config.TextColumn("Status"),
+            },
+        )
+        action1, action2 = st.columns([1, 2])
+        with action1:
+            select_all = st.checkbox("सर्व Pending निवडा", key="verify_select_all")
+        if select_all:
+            edited_checklist["Select"] = True
+        selected_ids = edited_checklist.loc[edited_checklist["Select"], "Trip ID"].astype(int).tolist()
+        with action2:
+            st.write(f"**निवडलेल्या ट्रिप: {len(selected_ids)}**")
+
+        confirm_bulk = st.checkbox(
+            "मी निवडलेल्या ट्रिप आणि supporting documents तपासले आहेत.",
+            key="verify_bulk_confirm",
+        )
+        if st.button(
+            "✓ Verify Selected Trips", type="primary",
+            disabled=(not selected_ids or not confirm_bulk), key="verify_selected_trips",
+        ):
+            verified_ids, duplicate_messages, already_verified = [], [], []
+            timestamp = now_text()
             try:
-                duplicate_id = None
                 with engine.begin() as conn:
-                    current = conn.execute(
-                        text("SELECT status FROM trips WHERE id=:id"),
-                        {"id": int(trip_id)},
-                    ).first()
-                    if not current or current[0] == "Verified":
-                        st.error("ALREADY VERIFIED — This trip has already been checked.")
-                    else:
+                    for selected_id in selected_ids:
+                        selected_row = vdf[vdf["id"].astype(int) == selected_id]
+                        if selected_row.empty:
+                            continue
+                        row = selected_row.iloc[0]
+                        bill = str(row["bill_ref"] or "").strip()
+                        current = conn.execute(
+                            text("SELECT status FROM trips WHERE id=:id"), {"id": selected_id}
+                        ).first()
+                        if not current or current[0] == "Verified":
+                            already_verified.append(selected_id)
+                            continue
+                        duplicate_id = None
                         if bill:
                             duplicate = conn.execute(text("""SELECT id FROM trips
                                 WHERE transporter=:tr AND bill_ref=:b AND id != :id LIMIT 1"""),
-                                {"tr": selected["transporter"], "b": bill, "id": int(trip_id)},
+                                {"tr": row["transporter"], "b": bill, "id": selected_id},
                             ).first()
                             duplicate_id = duplicate[0] if duplicate else None
-                        if duplicate_id is None:
-                            conn.execute(text("""UPDATE trips SET status='Verified',
-                                verified_by=:u, verified_at=:t
-                                WHERE id=:id AND status != 'Verified'"""),
-                                {"u": username, "t": now_text(), "id": int(trip_id)},
+                        if duplicate_id is not None:
+                            duplicate_messages.append(
+                                f"Trip ID {selected_id}: duplicate bill reference (Trip ID {duplicate_id})"
                             )
-                if duplicate_id is not None:
-                    st.error(
-                        f"Duplicate bill reference detected for this transporter "
-                        f"(Trip ID {duplicate_id}). Verification cancelled."
-                    )
-                elif current and current[0] != "Verified":
-                    audit(username, "VERIFY", "trip", trip_id, f"bill_ref={bill}")
-                    st.success("Trip verified successfully.")
-                    st.rerun()
+                            continue
+                        result = conn.execute(text("""UPDATE trips SET status='Verified',
+                            verified_by=:u, verified_at=:t
+                            WHERE id=:id AND status != 'Verified'"""),
+                            {"u": username, "t": timestamp, "id": selected_id},
+                        )
+                        if result.rowcount:
+                            verified_ids.append(selected_id)
+                for selected_id in verified_ids:
+                    row = vdf[vdf["id"].astype(int) == selected_id].iloc[0]
+                    audit(username, "VERIFY", "trip", selected_id,
+                          f"bill_ref={str(row['bill_ref'] or '').strip()}")
+                st.cache_data.clear()
+                if verified_ids:
+                    st.success(f"यशस्वी! {len(verified_ids)} ट्रिप Verified केल्या. IDs: {', '.join(map(str, verified_ids))}")
+                if duplicate_messages:
+                    st.warning("खालील ट्रिप duplicate bill मुळे Verify केल्या नाहीत: " + " | ".join(duplicate_messages))
+                if already_verified:
+                    st.info("आधीच Verify झालेल्या Trip IDs: " + ", ".join(map(str, already_verified)))
+                st.rerun()
             except Exception as exc:
-                st.error(f"Verification failed: {exc}")
+                st.error(f"Bulk verification failed: {exc}")
     else:
         st.success("No pending trips to verify.")
+
+    st.markdown("### Verification Status")
+    status_df = read_df("""SELECT id AS "Trip ID", trip_date AS "Trip Date", plant AS Plant,
+        transporter AS Transporter, vehicle_no AS "Vehicle No.", rate AS "Amount (₹)",
+        status AS Status, verified_by AS "Verified By", verified_at AS "Verified At"
+        FROM trips ORDER BY trip_date DESC, id DESC LIMIT 500""")
+    if not is_admin and not status_df.empty:
+        status_df = status_df[status_df["Plant"].isin(allowed_plants)]
+    st.dataframe(style_status_columns(status_df), use_container_width=True, hide_index=True)
 
 if is_admin:
     with pages[4]:
