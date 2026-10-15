@@ -301,7 +301,6 @@ if is_admin:
 pages = st.tabs(tabs)
 
 with pages[0]:
-    # Clear saved values before recreating widgets after a successful submission.
     if st.session_state.pop("reset_trip_entry_fields", False):
         for field_key in (
             "entry_trip_date", "entry_plant", "entry_transport_type",
@@ -319,10 +318,24 @@ with pages[0]:
         st.warning("No plant access assigned to this account. Ask an admin to assign plant access.")
 
     trans_list, veh_df, vendor_list = load_trip_entry_masters()
-    # Put entry fields in one Streamlit form: the app will not rerun after every field.
-    # Vehicle choices include all master vehicles; the transporter/vehicle match is validated on save.
-    vehicle_options = veh_df["vehicle_no"].dropna().astype(str).tolist() if not veh_df.empty else []
-    c1, c2, c3 = st.columns(3)
+
+    # Keep transporter outside the form so selecting it immediately filters vehicle choices.
+    transporter = st.selectbox("Transporter", [""] + trans_list, key="entry_transporter")
+    if not veh_df.empty and transporter:
+        transporter_vehicles = veh_df[
+            veh_df["transporter"].fillna("").astype(str).str.strip() == transporter
+        ].copy()
+    else:
+        transporter_vehicles = pd.DataFrame(columns=veh_df.columns)
+    vehicle_options = (
+        transporter_vehicles["vehicle_no"].dropna().astype(str).tolist()
+        if not transporter_vehicles.empty else []
+    )
+
+    current_vehicle = st.session_state.get("entry_vehicle_no", "")
+    if current_vehicle and current_vehicle not in vehicle_options:
+        st.session_state["entry_vehicle_no"] = ""
+
     with st.form("new_trip_entry_form", clear_on_submit=True):
         c1, c2, c3 = st.columns(3)
         trip_date = c1.date_input("Trip Date", value=datetime.now(TZ).date(), format="DD-MM-YYYY", key="entry_trip_date")
@@ -330,19 +343,25 @@ with pages[0]:
         transport_type = c3.selectbox("Transport Type", ["", "Inward", "Outward", "Inter-plant", "Local", "Other"], key="entry_transport_type")
 
         c1, c2, c3 = st.columns(3)
-        transporter = c1.selectbox("Transporter", [""] + trans_list, key="entry_transporter")
-        vehicle_no = c2.selectbox("Vehicle No.", [""] + vehicle_options, key="entry_vehicle_no")
-        selected_vehicle = veh_df[veh_df["vehicle_no"].astype(str) == vehicle_no] if vehicle_no and not veh_df.empty else pd.DataFrame()
+        vehicle_no = c1.selectbox(
+            "Vehicle No.", [""] + vehicle_options, key="entry_vehicle_no",
+            disabled=not bool(transporter),
+            help="Select a transporter first; only that transporter's vehicles are shown.",
+        )
+        selected_vehicle = (
+            transporter_vehicles[transporter_vehicles["vehicle_no"].astype(str) == vehicle_no]
+            if vehicle_no and not transporter_vehicles.empty else pd.DataFrame()
+        )
         master_size = str(selected_vehicle.iloc[0]["vehicle_size"] or "") if not selected_vehicle.empty else ""
         if master_size.lower() == "nan":
             master_size = ""
-        c3.text_input("Vehicle Size (from master)", value=master_size, disabled=True)
+        c2.text_input("Vehicle Size (from master)", value=master_size, disabled=True)
+        c3.selectbox("Purpose", ["", "Dispatch", "Local Trip", "Vendor"], key="entry_purpose")
 
         c1, c2, c3 = st.columns(3)
         vendor = c1.selectbox("Vendor", [""] + vendor_list, key="entry_vendor")
-        purpose = c2.selectbox("Purpose", ["", "Dispatch", "Local Trip", "Vendor"], key="entry_purpose")
-        challan_no = c3.text_input("Challan No.", key="entry_challan_no")
-        material = st.text_input("Material", key="entry_material")
+        challan_no = c2.text_input("Challan No.", key="entry_challan_no")
+        material = c3.text_input("Material", key="entry_material")
         remarks = st.text_area("Narration (required)", key="entry_remarks", placeholder="Enter trip narration before saving")
         suggested_rate = float(selected_vehicle.iloc[0]["fixed_rate"]) if not selected_vehicle.empty and pd.notna(selected_vehicle.iloc[0]["fixed_rate"]) else 0.0
         rate = st.number_input("Rate (₹)", min_value=0.0, value=suggested_rate, step=100.0, key="entry_rate")
@@ -352,8 +371,8 @@ with pages[0]:
         if not allowed_plants:
             st.error("No plant access assigned to this account.")
         elif not transporter or not vehicle_no:
-            st.error("कृपया Transporter आणि Vehicle No. निवडा.")
-        elif selected_vehicle.empty or str(selected_vehicle.iloc[0]["transporter"]) != transporter:
+            st.error("कृपया Transporter आणि त्याचा Vehicle No. निवडा.")
+        elif selected_vehicle.empty or str(selected_vehicle.iloc[0]["transporter"]).strip() != transporter:
             st.error("निवडलेला Vehicle या Transporter चा नाही. कृपया योग्य Vehicle निवडा.")
         elif not remarks.strip():
             st.error("Trip save करण्यापूर्वी Narration लिहिणे आवश्यक आहे.")
@@ -362,15 +381,14 @@ with pages[0]:
                 trip_values = {
                     "d": trip_date.isoformat(), "p": plant, "tt": transport_type,
                     "tr": transporter, "v": vehicle_no, "vs": master_size,
-                    "ve": vendor, "pu": purpose, "fl": "", "ft": "",
-                    "tl": "", "to": "", "ch": challan_no, "br": "",
+                    "ve": vendor, "pu": st.session_state.get("entry_purpose", ""),
+                    "fl": "", "ft": "", "tl": "", "to": "", "ch": challan_no, "br": "",
                     "ma": material, "re": remarks, "ra": rate,
                     "by": username, "at": now_text(),
                 }
                 trip_id = insert_trip(trip_values)
                 audit(username, "CREATE", "trip", trip_id,
                       f"plant={plant}; transporter={transporter}; vehicle={vehicle_no}")
-                # clear_on_submit clears all form widgets; rerun also refreshes the UI.
                 st.session_state["trip_saved_message"] = f"Trip saved successfully. Trip ID: {trip_id}. पुढील एन्ट्रीसाठी फॉर्म रिकामा केला आहे."
                 st.rerun()
             except Exception as exc:
@@ -530,8 +548,16 @@ with pages[2]:
 
     if not rdf.empty:
         total_amount = pd.to_numeric(rdf["rate"], errors="coerce").fillna(0).sum()
-        st.metric("Total Trips", len(rdf))
-        st.metric("Total Amount", f"₹{total_amount:,.2f}")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("TOTAL TRIPS", f"{len(rdf):,}")
+        m2.metric("TOTAL AMOUNT", f"₹{total_amount:,.2f}")
+        avg_amount = total_amount / len(rdf) if len(rdf) else 0
+        m3.metric("AVERAGE AMOUNT / TRIP", f"₹{avg_amount:,.2f}")
+        st.markdown(
+            "<div style='height:4px;background:linear-gradient(90deg,#66727d,#c7cdd2);"
+            "border-radius:8px;margin:4px 0 18px 0'></div>",
+            unsafe_allow_html=True,
+        )
         c1, c2 = st.columns(2)
         summaries = [
             ("Date-wise", "trip_date"),
@@ -542,11 +568,30 @@ with pages[2]:
         ]
         for index, (label, column) in enumerate(summaries):
             target = c1 if index % 2 == 0 else c2
-            target.write(f"**{label}**")
+            target.markdown(f"**{label} Summary**")
             summary = rdf.groupby(column, dropna=False, as_index=False).agg(
                 Trips=("id", "count"), Amount=("rate", "sum")
             )
-            target.dataframe(summary, use_container_width=True)
+            summary["Amount"] = pd.to_numeric(summary["Amount"], errors="coerce").fillna(0).map(
+                lambda value: f"₹{value:,.2f}"
+            )
+            target.dataframe(summary, use_container_width=True, hide_index=True)
+        st.markdown("### Trip Details")
+        detail_cols = [
+            col for col in [
+                "trip_date", "plant", "transport_type", "transporter", "vehicle_no",
+                "vehicle_size", "vendor", "purpose", "challan_no", "material",
+                "rate", "status", "remarks"
+            ] if col in rdf.columns
+        ]
+        detail = rdf[detail_cols].copy()
+        if "trip_date" in detail.columns:
+            detail["trip_date"] = pd.to_datetime(detail["trip_date"], errors="coerce").dt.strftime("%d-%m-%Y")
+        if "rate" in detail.columns:
+            detail["rate"] = pd.to_numeric(detail["rate"], errors="coerce").fillna(0).map(
+                lambda value: f"₹{value:,.2f}"
+            )
+        st.dataframe(detail, use_container_width=True, hide_index=True)
 
         xbuf = io.BytesIO()
         with pd.ExcelWriter(xbuf, engine="openpyxl") as writer:
