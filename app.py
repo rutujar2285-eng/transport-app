@@ -863,7 +863,10 @@ with pages[3]:
         status AS Status, verified_by AS "Verified By", verified_at AS "Verified At"
         FROM trips ORDER BY trip_date DESC, id DESC LIMIT 500""")
     if not is_admin and not status_df.empty:
-        status_df = status_df[status_df["Plant"].isin(allowed_plants)]
+        # pandas/database drivers may normalize SQL aliases to lowercase.
+        plant_col = next((c for c in status_df.columns if str(c).strip().lower() == "plant"), None)
+        if plant_col is not None:
+            status_df = status_df[status_df[plant_col].isin(allowed_plants)]
     st.dataframe(style_status_columns(status_df), use_container_width=True, hide_index=True)
 
 if is_admin:
